@@ -6,6 +6,32 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`--compact`** writes `peaks` as one `wp1:` string instead of a number
+  array — the format WaveformPlayer 2.0's `data-waveform` reads — and adds
+  `duration` (seconds, 2 places) to each JSON file, after the other keys.
+  1800 peaks are 2,404 characters: a typical per-file JSON goes from ~17.7 KB
+  to ~2.4 KB. Works with `--output`, the default next-to-the-audio JSON,
+  `--format inline` (strings in place of arrays) and alongside `--manifest`
+  (whose `peaks` stay the hex waveform-sounds reads). Without the flag every
+  output is byte-for-byte what it was.
+  - Format: `"wp1:"` + base64url (RFC 4648 §5, no padding) of one byte per
+    peak, `byte = round(clamp(peak, 0, 1) × 255)`, quantised from the
+    unrounded peaks, so `--precision` doesn't apply.
+- **`--html`** prints one `<div data-waveform-player data-url data-waveform
+  data-duration data-preload="none" data-title>` per file, attributes
+  HTML-escaped, in path order, so a page shows waveforms and lengths without
+  loading any audio until play. URLs follow `--root` and `--base-url`; the
+  title is the file name as the manifest reads it. No JSON is written unless
+  `--output` asks for it; with `--manifest`, the manifest is written too and
+  each snippet uses its entry's `url` and `title`. Exits 2 with
+  `--format inline`.
+- **`encodeCompactPeaks(peaks)`, `decodeCompactPeaks(string)` and
+  `COMPACT_PEAKS_PREFIX`** in the library. Decoding returns byte / 255 and
+  throws on a missing `wp1:` prefix, a character outside base64url
+  (padding included), or a truncated string.
+
 ## [2.2.0] — 2026-10-07
 
 ### Added

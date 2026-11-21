@@ -26,6 +26,41 @@ Then generate a `.json` per audio file:
 npx @arraypress/waveform-gen ./audio/*.mp3 --output ./public/waveforms/ --bpm
 ```
 
+### Compact peaks and HTML snippets
+
+`--compact` writes `peaks` as one string instead of a number array, and adds
+`duration` (seconds) to each JSON file. 1800 peaks are 2,404 characters
+(about 2.4 KB a file, against ~18 KB for the default pretty-printed array):
+
+```bash
+npx @arraypress/waveform-gen ./audio/*.mp3 --output ./public/waveforms/ --compact
+```
+
+```json
+{ "peaks": "wp1:AAAAAAAAAAAAAbxcUcRoU0I9ODAqIx8d…", "duration": 122 }
+```
+
+`--html` prints a ready-to-paste player per file, so a page shows every
+waveform and length without downloading any audio until play. URLs follow
+`--root` and `--base-url` (below); no JSON is written unless `--output` asks
+for it, and with `--manifest` the manifest is written too:
+
+```bash
+npx @arraypress/waveform-gen ./public/audio/*.mp3 --html --base-url /audio/
+```
+
+```html
+<div data-waveform-player data-url="/audio/little-paris.mp3" data-waveform="wp1:AAAAAAAAAAAAAbxc…" data-duration="122" data-preload="none" data-title="little-paris"></div>
+```
+
+The format is `"wp1:"` + base64url (RFC 4648 §5: `A–Z a–z 0–9 - _`, no
+padding) of one byte per peak, `byte = round(clamp(peak, 0, 1) × 255)`.
+It is quantised from the unrounded peaks, so `--precision` doesn't apply.
+`--compact` also works with `--format inline`; a manifest's `peaks` stay
+the hex waveform-sounds reads. In code: `encodeCompactPeaks(peaks)` and
+`decodeCompactPeaks(string)` (each byte / 255; throws on a string without
+the `wp1:` prefix or with characters outside base64url).
+
 ### Sounds manifest
 
 For [`@arraypress/waveform-sounds`](https://www.npmjs.com/package/@arraypress/waveform-sounds),
@@ -46,8 +81,8 @@ npx @arraypress/waveform-gen ./public/previews/ --recursive \
 | Flag | Default | |
 |---|---|---|
 | `--manifest <file>` | | Where to write the manifest. Without `--output`, no per-file JSON is written. |
-| `--root <dir>` | deepest folder containing every input | URLs and types are relative to it. |
-| `--base-url <url>` | `/` | Public URL of `--root`. |
+| `--root <dir>` | deepest folder containing every input | URLs and types are relative to it (also for `--html`). |
+| `--base-url <url>` | `/` | Public URL of `--root` (also for `--html`). |
 | `--type <name>` | the file's folder | Type for every sound (none for files directly in `--root`). |
 | `--manifest-bars <n>` | `64` | Bars per sound, stored as 8-bit hex. |
 | `--waveform-base-url <url>` | `--base-url` | Public URL of `--output`; with `--output`, each sound links its full JSON as `waveform`. |

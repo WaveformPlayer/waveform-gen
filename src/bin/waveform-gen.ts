@@ -8,10 +8,12 @@
  *   waveform-gen ./audio/*.mp3 --output ./waveforms/
  *   waveform-gen song.mp3 --format inline
  *   waveform-gen ./previews/ --recursive --manifest ./public/sounds.json
+ *   waveform-gen ./public/audio/*.mp3 --html --base-url /audio/
  */
 
 import {generatePeaks, roundPeaks} from '../lib/generate.js';
-import {manifestEntry, createManifest, commonRoot, relativeTo, fileUrl, DEFAULT_MANIFEST_BARS} from '../lib/manifest.js';
+import {encodeCompactPeaks} from '../lib/compact.js';
+import {manifestEntry, createManifest, commonRoot, relativeTo, fileUrl, parseFilename, naturalCompare, DEFAULT_MANIFEST_BARS} from '../lib/manifest.js';
 import type {ManifestEntry, ManifestItem, RootInput} from '../lib/manifest.js';
 import {writeFile, mkdir, readFile, readdir, stat} from 'node:fs/promises';
 import {resolve, basename, extname, join, dirname, relative, sep} from 'node:path';
@@ -32,6 +34,8 @@ interface CliOptions {
     manifestBars: number;
     type: string | null;
     waveformBaseUrl: string | null;
+    compact: boolean;
+    html: boolean;
 }
 
 /** A timed label read from a `.markers.txt` sidecar. */
@@ -55,6 +59,8 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     waveform-gen song.mp3 --samples 400
     waveform-gen song.mp3 --format inline
     waveform-gen ./previews/ --recursive --manifest ./public/sounds.json --base-url /previews/
+    waveform-gen ./public/audio/*.mp3 --compact --output ./public/waveforms/
+    waveform-gen ./public/audio/*.mp3 --html --base-url /audio/
 
   Options:
     --samples <n>      Number of peaks (default: 1800)
@@ -64,6 +70,17 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
     --format <type>    json (default) or inline (stdout). Inline prints a
                        peaks array for one file; for several files or a
                        directory, one object: {"<path>": [peaks], ...}
+    --compact          Write peaks as one "wp1:…" string (8 bits per peak,
+                       base64url) instead of a number array, and add
+                       "duration" (seconds) to each JSON file. Applies to
+                       --output/default JSON files and --format inline;
+                       --precision has no effect on it. Manifest peaks stay
+                       hex, as waveform-sounds reads them
+    --html             Print a ready-to-paste WaveformPlayer <div> per file
+                       (compact peaks, duration, preload none, title) instead
+                       of writing JSON. URLs follow --root and --base-url
+                       below. With --manifest, also writes the manifest;
+                       with --output, also writes the JSON files
     --bpm              Detect tempo and write "bpm" into the JSON
     --recursive        Scan directories recursively
     --quiet            Suppress progress output (errors are still shown)
@@ -76,8 +93,8 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
                        in the folder or file name), duration and 64-bar
                        peaks. Without --output no per-file JSON is written
     --root <dir>       Folder URLs and types are relative to (default: the
-                       deepest folder containing every input)
-    --base-url <url>   Public URL of --root (default: /)
+                       deepest folder containing every input). Also --html
+    --base-url <url>   Public URL of --root (default: /). Also --html
     --type <name>      Type for every sound (default: the file's folder name;
                        none for files directly in --root)
     --manifest-bars <n>       Bars per sound (default: 64)
@@ -89,8 +106,8 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
   Exit status:
     0  every file generated
     1  a file failed, an input path is missing, or a flag value is invalid
-    2  unknown flag, a flag missing its value, or --manifest with
-       --format inline
+    2  unknown flag, a flag missing its value, or --manifest or --html
+       with --format inline
 
   JSON Output (bpm only with --bpm, markers only with a sidecar):
     {
@@ -98,6 +115,19 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       "bpm": 120,
       "markers": [{"time": 30, "label": "Chorus"}]
     }
+
+  With --compact:
+    {
+      "peaks": "wp1:M17_…",
+      "bpm": 120,
+      "markers": [{"time": 30, "label": "Chorus"}],
+      "duration": 184.32
+    }
+
+  --html prints, per file:
+    <div data-waveform-player data-url="/audio/song.mp3"
+      data-waveform="wp1:M17_…" data-duration="184.32" data-preload="none"
+      data-title="song"></div>
 
   Markers:
     Auto-detected from sidecar files. For song.mp3, place song.markers.txt
@@ -132,7 +162,9 @@ const options: CliOptions = {
     baseUrl: '/',
     manifestBars: DEFAULT_MANIFEST_BARS,
     type: null,
-    waveformBaseUrl: null
+    waveformBaseUrl: null,
+    compact: false,
+    html: false
 };
 
 const inputPaths: string[] = [];
@@ -170,7 +202,9 @@ function usageError(message: string): never {
 }
 
 // Flags that switch something on, mapped to their option key.
-const BOOLEAN_FLAGS: Record<string, 'bpm' | 'recursive' | 'quiet'> = {'--bpm': 'bpm', '--recursive': 'recursive', '--quiet': 'quiet'};
+const BOOLEAN_FLAGS: Record<string, 'bpm' | 'recursive' | 'quiet' | 'compact' | 'html'> = {
+    '--bpm': 'bpm', '--recursive': 'recursive', '--quiet': 'quiet', '--compact': 'compact', '--html': 'html'
+};
 const VALUE_FLAGS = new Set([
     '--samples', '--precision', '--output', '--format',
     '--manifest', '--root', '--base-url', '--manifest-bars', '--type', '--waveform-base-url'
@@ -248,6 +282,10 @@ for (let i = 0; i < args.length; i++) {
 // one of the two requests silently unanswered.
 if (options.manifest && options.format === 'inline') {
     usageError('--manifest cannot be combined with --format inline');
+}
+// Both print to stdout, in different shapes.
+if (options.html && options.format === 'inline') {
+    usageError('--html cannot be combined with --format inline');
 }
 
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac']);
@@ -359,7 +397,10 @@ async function main() {
         process.exit(1);
     }
 
-    if (!options.quiet && options.format !== 'inline') {
+    // Progress goes to stdout, so it is off whenever stdout is the output.
+    const progress = !options.quiet && options.format !== 'inline' && !options.html;
+
+    if (progress) {
         console.log(`\n  🎵 waveform-gen — ${files.length} file${files.length > 1 ? 's' : ''}`);
         console.log(`     samples: ${options.samples} | precision: ${options.precision}\n`);
     }
@@ -372,7 +413,7 @@ async function main() {
     // by path, since back-to-back unlabelled arrays can't be told apart.
     const inlineSingle = inputPaths.length === 1 && files.length === 1
         && files[0].file === resolve(inputPaths[0]);
-    const inlinePeaks: Record<string, number[]> = {};
+    const inlinePeaks: Record<string, number[] | string> = {};
 
     // Output paths claimed so far this run, lower-cased so `Song.json` and
     // `song.json` collide as they would on a case-insensitive filesystem.
@@ -380,12 +421,19 @@ async function main() {
     // one used to overwrite the earlier and still be reported as generated.
     const claimed = new Map<string, string>();
 
-    // Manifest mode: per-file JSON is written only when --output asks for it.
-    const writeJson = options.format !== 'inline' && (!options.manifest || options.output);
-    const manifestRoot = options.manifest
+    // Manifest and --html modes: per-file JSON is written only when --output
+    // asks for it.
+    const writeJson = options.format !== 'inline' && ((!options.manifest && !options.html) || options.output);
+    const urlRoot = options.manifest || options.html
         ? resolve(options.root ?? commonRoot(inputBases) ?? process.cwd())
         : null;
+    const manifestRoot = options.manifest ? urlRoot : null;
     const manifestItems: ManifestItem[] = [];
+    const snippets: {rel: string, html: string}[] = [];
+
+    // Compact peaks and the manifest are quantised from the unrounded peaks
+    // (rounding to 2 places first would shift the 8-bit values).
+    const unrounded = Boolean(options.manifest || options.compact || options.html);
 
     for (const {file, rel: name} of files) {
         const relJson = join(dirname(name), basename(name, extname(name)) + '.json');
@@ -394,12 +442,13 @@ async function main() {
             : join(dirname(file), basename(relJson));
 
         try {
-            if (!options.quiet && options.format !== 'inline') {
+            if (progress) {
                 process.stdout.write(`  ⏳ ${name}...`);
             }
 
             // Before decoding: a file outside --root can't get a URL.
-            const manifestRel = manifestRoot ? relativeTo(manifestRoot, file) : null;
+            const urlRel = urlRoot ? relativeTo(urlRoot, file) : null;
+            const manifestRel = manifestRoot ? urlRel : null;
 
             if (writeJson) {
                 const key = resolve(outPath).toLowerCase();
@@ -409,15 +458,18 @@ async function main() {
                 claimed.set(key, name);
             }
 
-            // Generate peaks. The manifest downsamples the unrounded peaks
-            // (rounding to 2 places first would shift the 8-bit values), so
-            // rounding for the per-file JSON happens here instead.
+            // Generate peaks. The manifest and compact peaks start from the
+            // unrounded peaks, so rounding for the per-file JSON happens here
+            // instead.
             const result = await generatePeaks(file, {
                 samples: options.samples,
-                precision: options.manifest ? -1 : options.precision,
+                precision: unrounded ? -1 : options.precision,
                 detectBPM: options.bpm
             });
-            const peaks = options.manifest ? roundPeaks(result.peaks, options.precision) : result.peaks;
+            const peaks: number[] | string = options.compact
+                ? encodeCompactPeaks(result.peaks)
+                : unrounded ? roundPeaks(result.peaks, options.precision) : result.peaks;
+            const duration = Math.round(result.duration * 100) / 100;
 
             let entry: ManifestEntry | null = null;
             if (manifestRoot) {
@@ -431,15 +483,26 @@ async function main() {
                 });
             }
 
+            const snippet = options.html ? {
+                rel: urlRel!,
+                html: playerSnippet({
+                    url: entry ? entry.url : fileUrl(urlRel!, options.baseUrl),
+                    waveform: encodeCompactPeaks(result.peaks),
+                    duration,
+                    title: entry ? entry.title : parseFilename(urlRel!).title
+                })
+            } : null;
+
             if (!writeJson && options.format !== 'inline') {
-                if (!options.quiet) {
+                if (progress) {
                     const extras = [];
                     if (entry!.bpm != null) extras.push(`${entry!.bpm} BPM`);
                     if (entry!.key) extras.push(entry!.key);
                     const suffix = extras.length ? ` (${extras.join(', ')})` : '';
                     process.stdout.write(`\r  ✅ ${name}${suffix}\n`);
                 }
-                manifestItems.push({rel: manifestRel, entry} as ManifestItem);
+                if (entry) manifestItems.push({rel: manifestRel, entry} as ManifestItem);
+                if (snippet) snippets.push(snippet);
                 successCount++;
                 continue;
             }
@@ -458,18 +521,22 @@ async function main() {
             const markers = await readMarkers(file);
 
             // Build output
-            const output: {peaks: number[], bpm?: number, markers?: Marker[]} = {peaks};
+            const output: {peaks: number[] | string, bpm?: number, markers?: Marker[], duration?: number} = {peaks};
             if (result.bpm != null) output.bpm = result.bpm;
             if (markers.length) output.markers = markers;
+            // Compact only, so the default file stays as it always was. The
+            // player needs it to show a length before any audio loads.
+            if (options.compact) output.duration = duration;
 
             // Write
             await mkdir(dirname(outPath), {recursive: true});
             await writeFile(outPath, JSON.stringify(output, null, 2) + '\n');
             // Only now: a sound must not link a JSON that failed to write.
             if (entry) manifestItems.push({rel: manifestRel!, entry});
+            if (snippet) snippets.push(snippet);
 
             // Log
-            if (!options.quiet) {
+            if (progress) {
                 const extras = [];
                 if (result.bpm != null) extras.push(`${result.bpm} BPM`);
                 if (markers.length) extras.push(`${markers.length} markers`);
@@ -491,12 +558,17 @@ async function main() {
         console.log(JSON.stringify(inlinePeaks));
     }
 
+    // Path order, as the manifest is sorted.
+    for (const {html} of snippets.sort((a, b) => naturalCompare(a.rel, b.rel))) {
+        console.log(html);
+    }
+
     if (options.manifest) {
         // Written with whatever succeeded; a failure still fails the run.
         const manifest = createManifest(manifestItems);
         await mkdir(dirname(resolve(options.manifest)), {recursive: true});
         await writeFile(options.manifest, JSON.stringify(manifest, null, 2) + '\n');
-        if (!options.quiet) {
+        if (progress) {
             const {sounds} = manifest;
             const withBpm = sounds.filter(s => s.bpm != null).length;
             const withKey = sounds.filter(s => s.key).length;
@@ -504,11 +576,34 @@ async function main() {
         }
     }
 
-    if (!options.quiet && options.format !== 'inline') {
+    if (progress) {
         console.log(`\n  Done: ${successCount} generated, ${errorCount} failed\n`);
     }
 
     if (errorCount > 0) process.exitCode = 1;
+}
+
+/**
+ * Escape a value for a double-quoted HTML attribute.
+ *
+ * @param value
+ */
+function escapeAttr(value: string | number): string {
+    return String(value).replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
+}
+
+const HTML_ESCAPES: Record<string, string> = {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'};
+
+/**
+ * A WaveformPlayer element that shows its waveform and length without
+ * downloading any audio until play.
+ *
+ * @param attrs - Audio URL, compact peaks, duration (seconds) and title.
+ */
+function playerSnippet(attrs: {url: string, waveform: string, duration: number, title: string}): string {
+    return `<div data-waveform-player data-url="${escapeAttr(attrs.url)}"`
+        + ` data-waveform="${escapeAttr(attrs.waveform)}" data-duration="${escapeAttr(attrs.duration)}"`
+        + ` data-preload="none" data-title="${escapeAttr(attrs.title)}"></div>`;
 }
 
 main().catch(err => {
