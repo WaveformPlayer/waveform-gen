@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.0.0] — Unreleased
+
+Released alongside WaveformPlayer 2.0. A major version because the Node
+floor rises to 22.12.
+
 ### Added
 
 - **`--compact`** writes `peaks` as one `wp1:` string instead of a number
