@@ -145,7 +145,9 @@ describe('resamplePeaks', () => {
 	it.skipIf(!hasCore)('matches waveform-sounds\' resample bucket for bucket', async () => {
 		const { resample } = await import(pathToFileURL(CORE_DRAW).href);
 		const peaks = Array.from({ length: 1800 }, (_, i) => Math.abs(Math.sin(i / 7)) * (i % 13 ? 0.6 : 1));
-		for (const n of [1, 48, 64, 100, 128, 1800, 2000]) {
+		// Down to n bars only: manifests always shrink (1800 → 64/128). Growing
+		// is a drawing concern — waveform-sounds 2.2 interpolates there.
+		for (const n of [1, 48, 64, 100, 128, 1800]) {
 			expect(resamplePeaks(peaks, n)).toEqual(resample(peaks, n));
 		}
 	});
@@ -174,7 +176,12 @@ describe('128-bar manifest peaks in waveform-sounds', () => {
 		const heights = rects.map((r) => r.h);
 		const doubled = (bars) => bars.every((b, i) => i % 2 === 0 || b === bars[i - 1]);
 		expect(doubled(heights)).toBe(false);
-		expect(doubled(resample(decodePeaks(manifestEntry({ rel: 'a.wav', peaks: full }, { bars: 64 }).peaks), 128))).toBe(true);
+		// A 64-bar manifest across the same 128 bars is interpolated by
+		// waveform-sounds 2.2 (no longer stepped), but it is a guess between
+		// peaks: the 128 stored bars carry detail it doesn't have.
+		const from64 = resample(decodePeaks(manifestEntry({ rel: 'a.wav', peaks: full }, { bars: 64 }).peaks), 128);
+		expect(doubled(from64)).toBe(false);
+		expect(from64).not.toEqual(decoded);
 	});
 });
 
