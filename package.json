@@ -36,11 +36,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/arraypress/waveform-gen.git"
+    "url": "git+https://github.com/WaveformPlayer/waveform-gen.git"
   },
-  "homepage": "https://github.com/arraypress/waveform-gen",
+  "homepage": "https://github.com/WaveformPlayer/waveform-gen",
   "bugs": {
-    "url": "https://github.com/arraypress/waveform-gen/issues"
+    "url": "https://github.com/WaveformPlayer/waveform-gen/issues"
   },
   "engines": {
     "node": ">=18.0.0"
