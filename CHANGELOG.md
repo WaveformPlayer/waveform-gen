@@ -31,6 +31,20 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `COMPACT_PEAKS_PREFIX`** in the library. Decoding returns byte / 255 and
   throws on a missing `wp1:` prefix, a character outside base64url
   (padding included), or a truncated string.
+- **TypeScript declarations** for the library (`dist/lib/index.d.ts`, the
+  `types` condition of the `.` export), generated from the source.
+
+### Changed
+
+- **Written in TypeScript**, compiled by `tsc` to `dist/` (`dist/lib/` for the
+  library, `dist/bin/waveform-gen.js` for the CLI), which is what the package
+  ships in place of the hand-written `lib/` and `bin/`. Same behaviour: every
+  default output is byte-for-byte what it was. Only the `.` export is
+  importable, as before; `src/` is not shipped.
+- **Node 22.12 or later** (`engines.node` `>=22.12`, up from `>=18`), the
+  same floor as the rest of the WaveformPlayer family. The package is ES
+  modules only, as it always was, and on 22.12+ `require()` loads it too:
+  `const { generatePeaks } = require('@arraypress/waveform-gen')`.
 
 ## [2.2.0] — 2026-10-07
 

@@ -50,7 +50,7 @@
     "url": "https://github.com/WaveformPlayer/waveform-gen/issues"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.12"
   },
   "dependencies": {
     "audio-decode": "^3.11.0"

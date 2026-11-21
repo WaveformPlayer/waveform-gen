@@ -26,6 +26,16 @@ Then generate a `.json` per audio file:
 npx @arraypress/waveform-gen ./audio/*.mp3 --output ./public/waveforms/ --bpm
 ```
 
+Needs Node 22.12 or later. The library is ES modules with TypeScript
+declarations; `require()` loads it too on 22.12+ (Node 22 prints an
+`ExperimentalWarning` for that the first time; it still works):
+
+```js
+import { generatePeaks } from '@arraypress/waveform-gen';
+// or, from CommonJS:
+const { generatePeaks } = require('@arraypress/waveform-gen');
+```
+
 ### Compact peaks and HTML snippets
 
 `--compact` writes `peaks` as one string instead of a number array, and adds
