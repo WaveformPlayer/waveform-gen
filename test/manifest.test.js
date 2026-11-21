@@ -17,6 +17,7 @@ import {
 	isLoopPath,
 	createManifest,
 	buildManifest,
+	DEFAULT_MANIFEST_BARS,
 } from '../src/lib/index.ts';
 
 /**
@@ -144,9 +145,36 @@ describe('resamplePeaks', () => {
 	it.skipIf(!hasCore)('matches waveform-sounds\' resample bucket for bucket', async () => {
 		const { resample } = await import(pathToFileURL(CORE_DRAW).href);
 		const peaks = Array.from({ length: 1800 }, (_, i) => Math.abs(Math.sin(i / 7)) * (i % 13 ? 0.6 : 1));
-		for (const n of [1, 48, 64, 100, 1800, 2000]) {
+		for (const n of [1, 48, 64, 100, 128, 1800, 2000]) {
 			expect(resamplePeaks(peaks, n)).toEqual(resample(peaks, n));
 		}
+	});
+});
+
+describe('128-bar manifest peaks in waveform-sounds', () => {
+	const full = Array.from({ length: 1800 }, (_, i) => Math.abs(Math.sin(i / 31)) * (1 - i / 2400));
+
+	it.skipIf(!hasCore)('decode to the 128 stored bars, and a desktop row draws them without doubling', async () => {
+		const { decodePeaks, encodePeaks: coreEncode } = await import(pathToFileURL(CORE_DATA).href);
+		const { barRects, resample } = await import(pathToFileURL(CORE_DRAW).href);
+		const hex = manifestEntry({ rel: 'a.wav', peaks: full }).peaks;
+		expect(hex).toMatch(/^[0-9a-f]{256}$/);
+
+		const decoded = decodePeaks(hex);
+		expect(decoded).toHaveLength(128);
+		// Each decoded bar is the stored byte / 255: re-encoding is lossless.
+		expect(coreEncode(decoded)).toBe(hex);
+		expect(decoded).toEqual(resamplePeaks(full, 128).map((p) => Math.round(p * 255) / 255));
+
+		// A 384 px row at the default barWidth 2 + barGap 1 draws 128 bars:
+		// one per stored bar, where a 64-bar manifest would repeat each.
+		const opts = { style: 'mirror', barWidth: 2, barGap: 1 };
+		const rects = barRects(decoded, 384, 28, opts);
+		expect(rects).toHaveLength(128);
+		const heights = rects.map((r) => r.h);
+		const doubled = (bars) => bars.every((b, i) => i % 2 === 0 || b === bars[i - 1]);
+		expect(doubled(heights)).toBe(false);
+		expect(doubled(resample(decodePeaks(manifestEntry({ rel: 'a.wav', peaks: full }, { bars: 64 }).peaks), 128))).toBe(true);
 	});
 });
 
@@ -196,7 +224,7 @@ describe('isLoopPath', () => {
 describe('manifestEntry', () => {
 	const peaks = Array.from({ length: 128 }, (_, i) => (i % 2 ? 1 : 0.5));
 
-	it('builds url, title, type, bpm, key, duration and 64-bar hex peaks', () => {
+	it('builds url, title, type, bpm, key, duration and 128-bar hex peaks', () => {
 		const entry = manifestEntry({ rel: 'Bass Loops/NW_Bass_Loop_04_128_Fmin.wav', peaks, duration: 8.0234, bpm: null }, { baseUrl: '/audio/' });
 		expect(entry).toEqual({
 			url: '/audio/Bass%20Loops/NW_Bass_Loop_04_128_Fmin.wav',
@@ -206,8 +234,17 @@ describe('manifestEntry', () => {
 			key: 'Fm',
 			loop: true,
 			duration: 8.02,
-			peaks: 'ff'.repeat(64),
+			// 128 input peaks at 128 bars: stored as given, no bucketing.
+			peaks: '80ff'.repeat(64),
 		});
+		expect(DEFAULT_MANIFEST_BARS).toBe(128);
+	});
+
+	it('still writes 64 bars, or any count, when asked', () => {
+		const ramp = Array.from({ length: 1800 }, (_, i) => i / 1799);
+		expect(manifestEntry({ rel: 'a.wav', peaks: ramp }, { bars: 64 }).peaks).toBe(encodePeaks(resamplePeaks(ramp, 64)));
+		expect(manifestEntry({ rel: 'a.wav', peaks: ramp }, { bars: 64 }).peaks).toHaveLength(128);
+		expect(manifestEntry({ rel: 'a.wav', peaks: ramp }, { bars: 200 }).peaks).toHaveLength(400);
 	});
 
 	it('marks loops by a "loop" word in the path; everything else is left unmarked', () => {
@@ -253,7 +290,7 @@ afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 async function wav(rel, seconds = 0.5) {
 	const file = join(dir, rel);
 	await mkdir(dirname(file), { recursive: true });
-	// A decaying tone, so the 64 bars aren't all equal.
+	// A decaying tone, so the bars aren't all equal.
 	const data = tone(8000, seconds, 220, 0.8).map((v, i, a) => v * (1 - i / a.length));
 	await writeFile(file, encodeWav(data, 8000));
 	return file;
@@ -282,7 +319,7 @@ describe('buildManifest', () => {
 		]);
 		const loop10 = manifest.sounds[2];
 		expect(loop10).toMatchObject({ title: 'Loop 10', type: 'Drums', bpm: 120, duration: 1.5 });
-		expect(loop10.peaks).toMatch(/^[0-9a-f]{128}$/);
+		expect(loop10.peaks).toMatch(/^[0-9a-f]{256}$/);
 		// Normalised like the per-file JSON: the loudest bar is exactly 1.0.
 		expect(loop10.peaks.match(/../g)).toContain('ff');
 	});
@@ -310,6 +347,8 @@ describe('CLI --manifest', () => {
 		]);
 		expect(sounds[2]).not.toHaveProperty('type');
 		expect(sounds[0]).not.toHaveProperty('waveform');
+		// 128 bars by default: 256 hex characters.
+		for (const s of sounds) expect(s.peaks).toMatch(/^[0-9a-f]{256}$/);
 		expect(existsSync(join(dir, 'previews/Kick_01.json'))).toBe(false);
 	});
 
@@ -337,6 +376,21 @@ describe('CLI --manifest', () => {
 		const { peaks } = await readJson('public/wf/Bass/NW_Bass_Loop_04_128_Fmin.json');
 		expect(peaks).toHaveLength(200);
 		for (const p of peaks) expect(Number(p.toFixed(2))).toBe(p);
+	});
+
+	it('--manifest-bars 64 still writes 64 bars, the same bars a 64-bar library call stores', async () => {
+		const file = await wav('previews/Kick_01.wav');
+		const { code } = await run(['previews', '--manifest', 'm.json', '--manifest-bars', '64', '--quiet'], { cwd: dir });
+		expect(code).toBe(0);
+		const [sound] = (await readJson('m.json')).sounds;
+		expect(sound.peaks).toMatch(/^[0-9a-f]{128}$/);
+		expect(sound.peaks).toBe((await buildManifest([file], { bars: 64 })).sounds[0].peaks);
+	});
+
+	it('documents the 128 default and the flag in --help', async () => {
+		const { stdout } = await run(['--help']);
+		expect(stdout).toMatch(/--manifest-bars <n>\s+Bars per sound \(default: 128; 64 for a smaller/);
+		expect(stdout).toContain('128-bar');
 	});
 
 	it('roots shell-expanded file arguments at their common folder', async () => {

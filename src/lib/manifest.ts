@@ -46,7 +46,7 @@ export interface ManifestAnalysis {
 export interface ManifestEntryOptions {
     /** Public URL of the root (default '/'). */
     baseUrl?: string;
-    /** Bars in the `peaks` hex (default 64). */
+    /** Bars in the `peaks` hex (default 128). */
     bars?: number;
     /**
      * Type for every sound; default: the name of the file's folder, none for
@@ -92,7 +92,7 @@ export interface BuildManifestOptions {
     root?: string;
     /** Public URL of `root` (default '/'). */
     baseUrl?: string;
-    /** Bars per sound (default 64). */
+    /** Bars per sound (default 128). */
     bars?: number;
     /** Type for every sound (default: folder name). */
     type?: string;
@@ -107,8 +107,13 @@ export interface BuildManifestOptions {
 /** Manifest format version, as waveform-sounds' `SoundsManifest.version`. */
 export const MANIFEST_VERSION = 1;
 
-/** Default number of bars per sound: a sound browser row draws ~48–64. */
-export const DEFAULT_MANIFEST_BARS = 64;
+/**
+ * Default number of bars per sound. A waveform-sounds row draws one bar per
+ * 3 px (its default barWidth 2 + barGap 1), so ~100–130 in a desktop-width
+ * list: 128 keeps those rows sharp, where 64 drew each stored bar twice.
+ * Pass `bars: 64` for a manifest half the peak size.
+ */
+export const DEFAULT_MANIFEST_BARS = 128;
 
 // ============================================
 // Peaks
@@ -419,7 +424,7 @@ export function isLoopPath(rel: string): boolean {
  *   file name has none.
  * @param options
  * @param [options.baseUrl='/'] - Public URL of the root.
- * @param [options.bars=64] - Bars in the `peaks` hex.
+ * @param [options.bars=128] - Bars in the `peaks` hex.
  * @param [options.type] - Type for every sound; default: the name
  *   of the file's folder, none for a file directly in the root.
  * @param [options.waveform] - URL of the file's full peaks JSON.
@@ -461,7 +466,7 @@ export function createManifest(items: ManifestItem[]): SoundsManifest {
  * @param [options.root] - Directory URLs and types are relative to;
  *   default: the deepest folder containing every file.
  * @param [options.baseUrl='/'] - Public URL of `root`.
- * @param [options.bars=64] - Bars per sound.
+ * @param [options.bars=128] - Bars per sound.
  * @param [options.type] - Type for every sound (default: folder name).
  * @param [options.detectBPM=false] - Detect tempo for files whose
  *   name carries none.

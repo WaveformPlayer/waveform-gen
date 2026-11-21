@@ -90,14 +90,15 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
   Sounds manifest (for @arraypress/waveform-sounds):
     --manifest <file>  Write one JSON listing every sound: url, title, type,
                        bpm and key (from the file name), loop (a "loop" word
-                       in the folder or file name), duration and 64-bar
+                       in the folder or file name), duration and 128-bar
                        peaks. Without --output no per-file JSON is written
     --root <dir>       Folder URLs and types are relative to (default: the
                        deepest folder containing every input). Also --html
     --base-url <url>   Public URL of --root (default: /). Also --html
     --type <name>      Type for every sound (default: the file's folder name;
                        none for files directly in --root)
-    --manifest-bars <n>       Bars per sound (default: 64)
+    --manifest-bars <n>       Bars per sound (default: 128; 64 for a smaller
+                              manifest)
     --waveform-base-url <url> Public URL of --output, for each sound's
                               "waveform" link (default: --base-url)
 

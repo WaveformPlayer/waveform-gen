@@ -94,7 +94,7 @@ npx @arraypress/waveform-gen ./public/previews/ --recursive \
 | `--root <dir>` | deepest folder containing every input | URLs and types are relative to it (also for `--html`). |
 | `--base-url <url>` | `/` | Public URL of `--root` (also for `--html`). |
 | `--type <name>` | the file's folder | Type for every sound (none for files directly in `--root`). |
-| `--manifest-bars <n>` | `64` | Bars per sound, stored as 8-bit hex. |
+| `--manifest-bars <n>` | `128` | Bars per sound, stored as 8-bit hex (two characters per bar). 128 keeps desktop-width rows (~100–130 bars drawn) sharp; `--manifest-bars 64` halves the peaks for a smaller manifest. |
 | `--waveform-base-url <url>` | `--base-url` | Public URL of `--output`; with `--output`, each sound links its full JSON as `waveform`. |
 
 `title`, `bpm` and `key` come from the file name, and are left out rather than
