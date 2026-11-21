@@ -40,8 +40,13 @@ const BIN = join(HERE, '..', 'bin', 'waveform-gen.js');
 // skips is no check (it did, for a while, after waveform-sounds split its
 // src/js into folders).
 const CORE_REPO = join(HERE, '..', '..', 'waveform-sounds');
-const CORE_DATA = join(CORE_REPO, 'src', 'js', 'data', 'sounds.js');
-const CORE_DRAW = join(CORE_REPO, 'src', 'js', 'dom', 'draw.js');
+// .ts once waveform-sounds is on TypeScript (2.0), .js before.
+const coreFile = (...parts) => {
+	const ts = join(CORE_REPO, ...parts) + '.ts';
+	return existsSync(ts) ? ts : join(CORE_REPO, ...parts) + '.js';
+};
+const CORE_DATA = coreFile('src', 'js', 'data', 'sounds');
+const CORE_DRAW = coreFile('src', 'js', 'dom', 'draw');
 const hasCore = existsSync(CORE_REPO);
 
 describe('parseFilename', () => {
