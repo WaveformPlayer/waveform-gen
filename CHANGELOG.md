@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [3.1.0] — 2026-11-22
+
+### Changed
+
+- **Manifests default to 128 peaks per sound** (sharper rows on desktop);
+  pass `--manifest-bars 64` (`bars: 64` in the library) for 64, which writes
+  exactly what 3.0.0 did. Measured on 33 sample previews: ~435 B per sound
+  raw / ~177 B gzipped, up from ~307 B / ~105 B. waveform-sounds already
+  reads any bar count. Output without `--manifest` is unchanged.
+
 ## [3.0.0] — 2026-11-21
 
 Released alongside WaveformPlayer 2.0. A major version because the Node
