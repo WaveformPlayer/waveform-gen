@@ -12,9 +12,33 @@
 
 import {generatePeaks, roundPeaks} from '../lib/generate.js';
 import {manifestEntry, createManifest, commonRoot, relativeTo, fileUrl, DEFAULT_MANIFEST_BARS} from '../lib/manifest.js';
+import type {ManifestEntry, ManifestItem, RootInput} from '../lib/manifest.js';
 import {writeFile, mkdir, readFile, readdir, stat} from 'node:fs/promises';
 import {resolve, basename, extname, join, dirname, relative, sep} from 'node:path';
 import {existsSync} from 'node:fs';
+
+/** Parsed command-line options. */
+interface CliOptions {
+    samples: number;
+    precision: number;
+    output: string | null;
+    format: string;
+    bpm: boolean;
+    recursive: boolean;
+    quiet: boolean;
+    manifest: string | null;
+    root: string | null;
+    baseUrl: string;
+    manifestBars: number;
+    type: string | null;
+    waveformBaseUrl: string | null;
+}
+
+/** A timed label read from a `.markers.txt` sidecar. */
+interface Marker {
+    time: number;
+    label: string;
+}
 
 const args = process.argv.slice(2);
 
@@ -95,7 +119,7 @@ if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
 // Parse options
 // ============================================
 
-const options = {
+const options: CliOptions = {
     samples: 1800,
     precision: 2,
     output: null,
@@ -111,7 +135,7 @@ const options = {
     waveformBaseUrl: null
 };
 
-const inputPaths = [];
+const inputPaths: string[] = [];
 
 /**
  * Read an integer flag, exiting with a clear message when it isn't one.
@@ -121,12 +145,12 @@ const inputPaths = [];
  * rounding entirely (the `precision >= 0` test is false for NaN). A CLI that
  * writes quietly wrong output is worse than one that refuses the flag.
  *
- * @param {string} flag - Flag name, for the error message.
- * @param {string} raw - Raw argument value.
- * @param {number} [min] - Lowest accepted value.
- * @returns {number} The parsed integer.
+ * @param flag - Flag name, for the error message.
+ * @param raw - Raw argument value.
+ * @param min - Lowest accepted value.
+ * @returns The parsed integer.
  */
-function intArg(flag, raw, min = -Infinity) {
+function intArg(flag: string, raw: string, min: number = -Infinity): number {
     const n = Number(raw);
     if (!Number.isInteger(n) || n < min) {
         console.error(`[WaveformGen] ${flag} expects an integer${min > -Infinity ? ` of ${min} or more` : ''}, got: ${raw}`);
@@ -138,15 +162,15 @@ function intArg(flag, raw, min = -Infinity) {
 /**
  * Exit with a usage error (status 2, distinct from a failed file's 1).
  *
- * @param {string} message - What was wrong with the command line.
+ * @param message - What was wrong with the command line.
  */
-function usageError(message) {
+function usageError(message: string): never {
     console.error(`[WaveformGen] ${message} (see --help)`);
     process.exit(2);
 }
 
 // Flags that switch something on, mapped to their option key.
-const BOOLEAN_FLAGS = {'--bpm': 'bpm', '--recursive': 'recursive', '--quiet': 'quiet'};
+const BOOLEAN_FLAGS: Record<string, 'bpm' | 'recursive' | 'quiet'> = {'--bpm': 'bpm', '--recursive': 'recursive', '--quiet': 'quiet'};
 const VALUE_FLAGS = new Set([
     '--samples', '--precision', '--output', '--format',
     '--manifest', '--root', '--base-url', '--manifest-bars', '--type', '--waveform-base-url'
@@ -238,10 +262,10 @@ const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac
  * relative path is what gets mirrored under --output, so `in/a/intro.wav` and
  * `in/b/intro.wav` land in separate folders instead of on top of each other.
  *
- * @param {string[]} paths - File and directory arguments.
- * @returns {Promise<{file: string, rel: string}[]>} Unique files, first input wins.
+ * @param paths - File and directory arguments.
+ * @returns Unique files, first input wins.
  */
-async function resolveFiles(paths) {
+async function resolveFiles(paths: string[]): Promise<{file: string, rel: string}[]> {
     const entries = new Map();
     for (const p of paths) {
         const resolved = resolve(p);
@@ -255,7 +279,7 @@ async function resolveFiles(paths) {
                     if (!entries.has(file)) entries.set(file, relative(resolved, file));
                 }
             }
-        } catch (e) {
+        } catch (e: any) {
             // Always shown and fails the run: under --quiet a typo'd path in a
             // build script would otherwise just produce one fewer JSON file.
             console.error(`[WaveformGen] Skipping ${p} (${e.code || e.message})`);
@@ -271,10 +295,10 @@ async function resolveFiles(paths) {
  * folder. Filled by resolveFiles().
  * @type {{path: string, isDir: boolean}[]}
  */
-const inputBases = [];
+const inputBases: RootInput[] = [];
 
-async function scanDir(dir, recursive) {
-    const files = [];
+async function scanDir(dir: string, recursive: boolean): Promise<string[]> {
+    const files: string[] = [];
     const entries = await readdir(dir, {withFileTypes: true});
     for (const entry of entries) {
         const full = join(dir, entry.name);
@@ -291,7 +315,7 @@ async function scanDir(dir, recursive) {
 // Markers from sidecar .markers.txt
 // ============================================
 
-function parseTimestamp(ts) {
+function parseTimestamp(ts: string): number | null {
     const parts = ts.split(':').map(Number);
     if (parts.some(isNaN)) return null;
     if (parts.length === 1) return parts[0];
@@ -300,14 +324,14 @@ function parseTimestamp(ts) {
     return null;
 }
 
-async function readMarkers(audioFilePath) {
+async function readMarkers(audioFilePath: string): Promise<Marker[]> {
     const nameNoExt = basename(audioFilePath, extname(audioFilePath));
     const markerFile = join(dirname(audioFilePath), nameNoExt + '.markers.txt');
     if (!existsSync(markerFile)) return [];
 
     try {
         const content = await readFile(markerFile, 'utf-8');
-        const markers = [];
+        const markers: Marker[] = [];
         for (const line of content.split('\n')) {
             const trimmed = line.trim();
             if (!trimmed || trimmed.startsWith('#')) continue;
@@ -348,20 +372,20 @@ async function main() {
     // by path, since back-to-back unlabelled arrays can't be told apart.
     const inlineSingle = inputPaths.length === 1 && files.length === 1
         && files[0].file === resolve(inputPaths[0]);
-    const inlinePeaks = {};
+    const inlinePeaks: Record<string, number[]> = {};
 
     // Output paths claimed so far this run, lower-cased so `Song.json` and
     // `song.json` collide as they would on a case-insensitive filesystem.
     // `song.mp3` + `song.wav` in one folder both want `song.json`; the later
     // one used to overwrite the earlier and still be reported as generated.
-    const claimed = new Map();
+    const claimed = new Map<string, string>();
 
     // Manifest mode: per-file JSON is written only when --output asks for it.
     const writeJson = options.format !== 'inline' && (!options.manifest || options.output);
     const manifestRoot = options.manifest
         ? resolve(options.root ?? commonRoot(inputBases) ?? process.cwd())
         : null;
-    const manifestItems = [];
+    const manifestItems: ManifestItem[] = [];
 
     for (const {file, rel: name} of files) {
         const relJson = join(dirname(name), basename(name, extname(name)) + '.json');
@@ -395,9 +419,9 @@ async function main() {
             });
             const peaks = options.manifest ? roundPeaks(result.peaks, options.precision) : result.peaks;
 
-            let entry = null;
+            let entry: ManifestEntry | null = null;
             if (manifestRoot) {
-                entry = manifestEntry({rel: manifestRel, ...result}, {
+                entry = manifestEntry({rel: manifestRel!, ...result}, {
                     baseUrl: options.baseUrl,
                     bars: options.manifestBars,
                     type: options.type,
@@ -410,12 +434,12 @@ async function main() {
             if (!writeJson && options.format !== 'inline') {
                 if (!options.quiet) {
                     const extras = [];
-                    if (entry.bpm != null) extras.push(`${entry.bpm} BPM`);
-                    if (entry.key) extras.push(entry.key);
+                    if (entry!.bpm != null) extras.push(`${entry!.bpm} BPM`);
+                    if (entry!.key) extras.push(entry!.key);
                     const suffix = extras.length ? ` (${extras.join(', ')})` : '';
                     process.stdout.write(`\r  ✅ ${name}${suffix}\n`);
                 }
-                manifestItems.push({rel: manifestRel, entry});
+                manifestItems.push({rel: manifestRel, entry} as ManifestItem);
                 successCount++;
                 continue;
             }
@@ -434,7 +458,7 @@ async function main() {
             const markers = await readMarkers(file);
 
             // Build output
-            const output = {peaks};
+            const output: {peaks: number[], bpm?: number, markers?: Marker[]} = {peaks};
             if (result.bpm != null) output.bpm = result.bpm;
             if (markers.length) output.markers = markers;
 
@@ -442,7 +466,7 @@ async function main() {
             await mkdir(dirname(outPath), {recursive: true});
             await writeFile(outPath, JSON.stringify(output, null, 2) + '\n');
             // Only now: a sound must not link a JSON that failed to write.
-            if (entry) manifestItems.push({rel: manifestRel, entry});
+            if (entry) manifestItems.push({rel: manifestRel!, entry});
 
             // Log
             if (!options.quiet) {
@@ -454,7 +478,7 @@ async function main() {
             }
 
             successCount++;
-        } catch (err) {
+        } catch (err: any) {
             // Errors ignore --quiet (which only hides progress): the docs'
             // own prebuild recipe runs quiet, and a corrupt file must not
             // ship as a silently missing JSON.

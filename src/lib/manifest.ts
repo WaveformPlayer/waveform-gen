@@ -15,6 +15,95 @@
 import {basename, dirname, relative, resolve, sep, isAbsolute} from 'node:path';
 import {generatePeaks} from './generate.js';
 
+/** What {@link parseFilename} reads from a file name. */
+export interface ParsedFilename {
+    title: string;
+    bpm: number | null;
+    key: string | null;
+}
+
+/** One input path for {@link commonRoot}. */
+export interface RootInput {
+    /** Absolute path. */
+    path: string;
+    /** False for a file: its parent directory is used. */
+    isDir: boolean;
+}
+
+/** An analysed file, as {@link manifestEntry} takes it. */
+export interface ManifestAnalysis {
+    /** Path relative to the manifest root. */
+    rel: string;
+    /** Normalised peaks (0..1), any resolution. */
+    peaks: number[];
+    /** Seconds. */
+    duration?: number | null;
+    /** Detected tempo, used only when the file name has none. */
+    bpm?: number | null;
+}
+
+/** Options for {@link manifestEntry}. */
+export interface ManifestEntryOptions {
+    /** Public URL of the root (default '/'). */
+    baseUrl?: string;
+    /** Bars in the `peaks` hex (default 64). */
+    bars?: number;
+    /**
+     * Type for every sound; default: the name of the file's folder, none for
+     * a file directly in the root.
+     */
+    type?: string | null;
+    /** URL of the file's full peaks JSON. */
+    waveform?: string;
+}
+
+/** One sound in a manifest. Keys appear in this order in the JSON. */
+export interface ManifestEntry {
+    url: string;
+    title: string;
+    type?: string;
+    bpm?: number;
+    key?: string;
+    loop?: true;
+    duration?: number;
+    /** 8-bit hex peaks, two characters per bar. */
+    peaks: string;
+    waveform?: string;
+}
+
+/** An entry with the source path it is sorted by, for {@link createManifest}. */
+export interface ManifestItem {
+    rel: string;
+    entry: ManifestEntry;
+}
+
+/** A waveform-sounds manifest, as its `SoundsManifest`. */
+export interface SoundsManifest {
+    version: number;
+    sounds: ManifestEntry[];
+}
+
+/** Options for {@link buildManifest}. */
+export interface BuildManifestOptions {
+    /**
+     * Directory URLs and types are relative to; default: the deepest folder
+     * containing every file.
+     */
+    root?: string;
+    /** Public URL of `root` (default '/'). */
+    baseUrl?: string;
+    /** Bars per sound (default 64). */
+    bars?: number;
+    /** Type for every sound (default: folder name). */
+    type?: string;
+    /** Detect tempo for files whose name carries none (default false). */
+    detectBPM?: boolean;
+    /** Resolution decoded at before downsampling to `bars` (default 1800). */
+    samples?: number;
+    /** Returns the URL of a file's full peaks JSON, if there is one. */
+    waveform?: (file: string, rel: string) => string | undefined;
+}
+
 /** Manifest format version, as waveform-sounds' `SoundsManifest.version`. */
 export const MANIFEST_VERSION = 1;
 
@@ -31,10 +120,10 @@ export const DEFAULT_MANIFEST_BARS = 64;
  * Byte-for-byte the same as waveform-sounds' `encodePeaks`: each value is
  * clamped to 0..1 (non-numbers count as 0), scaled by 255 and rounded.
  *
- * @param {number[]} peaks - Values 0..1.
- * @returns {string} Hex string ('' for a non-array).
+ * @param peaks - Values 0..1.
+ * @returns Hex string ('' for a non-array).
  */
-export function encodePeaks(peaks) {
+export function encodePeaks(peaks: number[]): string {
     if (!Array.isArray(peaks)) return '';
     let out = '';
     for (const p of peaks) {
@@ -50,11 +139,11 @@ export function encodePeaks(peaks) {
  * waveform-sounds' `resample` (`src/js/dom/draw.js`), so the bars it would draw
  * from full-resolution peaks are the bars stored here.
  *
- * @param {number[]} peaks - Values 0..1.
- * @param {number} count - Bars wanted; a positive integer.
- * @returns {number[]} `count` values (`[]` for no peaks).
+ * @param peaks - Values 0..1.
+ * @param count - Bars wanted; a positive integer.
+ * @returns `count` values (`[]` for no peaks).
  */
-export function resamplePeaks(peaks, count) {
+export function resamplePeaks(peaks: number[], count: number): number[] {
     if (!peaks?.length || count <= 0) return [];
     if (peaks.length === count) return peaks.slice();
     const out = new Array(count);
@@ -85,6 +174,13 @@ const TOKEN_PUNCT = /^[([{]+|[)\]},.;:!]+$/g;
 
 const MODE_WORD = /^(min|minor|maj|major)$/i;
 
+/** A file-name number that may be the BPM, and the `bpm` word beside it (-1: none). */
+interface BpmCandidate {
+    i: number;
+    n: number;
+    marker: number;
+}
+
 /**
  * Classify one token as a key.
  *
@@ -97,10 +193,9 @@ const MODE_WORD = /^(min|minor|maj|major)$/i;
  *   lower-case `m` (`Fm`; not `FM`, the synth, nor `fm`).
  * - weak: `A`–`G` alone, a flat alone (`Eb`), and `Am` (the English word).
  *
- * @param {string} token - Punctuation-stripped token.
- * @returns {{key: string, strength: 'strong'|'weak'}|null}
+ * @param token - Punctuation-stripped token.
  */
-function keyToken(token) {
+function keyToken(token: string): {key: string, strength: 'strong'|'weak'} | null {
     // Root, accidental, mode — the mode glued on (Fmin) or absent.
     const m = token.match(/^([A-Ga-g])([#♯b♭]?)(min|minor|maj|major|m)?$/i);
     if (!m) return null;
@@ -146,24 +241,23 @@ function keyToken(token) {
  * parseFilename('NW_Bass_Loop_04_128_Fmin.wav')
  * // → { title: 'NW Bass Loop 04', bpm: 128, key: 'Fm' }
  *
- * @param {string} name - A file name or path (only the base name is read).
- * @returns {{title: string, bpm: number|null, key: string|null}}
+ * @param name - A file name or path (only the base name is read).
  */
-export function parseFilename(name) {
-    const file = String(name ?? '').split(/[\\/]/).pop();
+export function parseFilename(name: string): ParsedFilename {
+    const file = String(name ?? '').split(/[\\/]/).pop()!;
     const stem = file.replace(/\.[a-z0-9]{1,5}$/i, '');
     const raw = stem.split(SEPARATORS).filter(Boolean);
     const tokens = raw.map((t) => t.replace(TOKEN_PUNCT, ''));
-    const used = new Set();
+    const used = new Set<number>();
 
     // ---- BPM ----
-    const inRange = (n) => n >= BPM_MIN && n <= BPM_MAX;
-    let bpm = null;
+    const inRange = (n: number) => n >= BPM_MIN && n <= BPM_MAX;
+    let bpm: number | null = null;
     let bpmAt = -1;
-    const marked = [];
-    const bare = [];
+    const marked: BpmCandidate[] = [];
+    const bare: BpmCandidate[] = [];
     tokens.forEach((t, i) => {
-        let m;
+        let m: RegExpMatchArray | null;
         if ((m = t.match(/^(\d{2,3})bpm$/i)) || (m = t.match(/^bpm(\d{2,3})$/i))) {
             if (inRange(+m[1])) marked.push({i, n: +m[1], marker: -1});
         } else if (/^\d{2,3}$/.test(t)) {
@@ -194,9 +288,9 @@ export function parseFilename(name) {
     }
 
     // ---- Key ----
-    let key = null;
+    let key: string | null = null;
     const bpmSpan = [...used];
-    const besideBpm = (i, len = 1) =>
+    const besideBpm = (i: number, len = 1) =>
         bpmAt >= 0 && bpmSpan.some((b) => b === i - 1 || b === i + len);
     for (let i = 0; i < tokens.length && !key; i++) {
         if (used.has(i)) continue;
@@ -237,11 +331,10 @@ export function parseFilename(name) {
  * a trailing slash, so it can be a path (`/audio/`) or an origin
  * (`https://cdn.example.com/packs`).
  *
- * @param {string} relPath - Path relative to the root, either separator.
- * @param {string} [baseUrl='/'] - Public URL of the root.
- * @returns {string}
+ * @param relPath - Path relative to the root, either separator.
+ * @param baseUrl - Public URL of the root.
  */
-export function fileUrl(relPath, baseUrl = '/') {
+export function fileUrl(relPath: string, baseUrl: string = '/'): string {
     let base = baseUrl == null ? '/' : String(baseUrl);
     if (base && !base.endsWith('/')) base += '/';
     const path = String(relPath).split(/[\\/]+/).filter(Boolean).map(encodeURIComponent).join('/');
@@ -253,11 +346,10 @@ export function fileUrl(relPath, baseUrl = '/') {
  * compared segment by segment. Ties fall back to plain code-point order so
  * the result never depends on input order.
  *
- * @param {string} a
- * @param {string} b
- * @returns {number}
+ * @param a
+ * @param b
  */
-export function naturalCompare(a, b) {
+export function naturalCompare(a: string, b: string): number {
     const sa = String(a).split(/[\\/]/);
     const sb = String(b).split(/[\\/]/);
     for (let i = 0; i < Math.min(sa.length, sb.length); i++) {
@@ -274,11 +366,10 @@ const COLLATOR = new Intl.Collator('en', {numeric: true, sensitivity: 'base'});
  * an entry, its parent directory is used (a file argument contributes its
  * folder). Returns null when the paths share no root (different drives).
  *
- * @param {{path: string, isDir: boolean}[]} entries - Absolute paths.
- * @returns {string|null}
+ * @param entries - Absolute paths.
  */
-export function commonRoot(entries) {
-    let parts = null;
+export function commonRoot(entries: RootInput[]): string | null {
+    let parts: string[] | null = null;
     for (const {path, isDir} of entries) {
         const dir = resolve(isDir ? path : dirname(path));
         const segs = dir.split(sep);
@@ -308,10 +399,9 @@ export function commonRoot(entries) {
  * one-shot. The name is the evidence, the same as for BPM and key: a tempo
  * in the name does NOT make a file a loop.
  *
- * @param {string} rel - Path relative to the manifest root.
- * @returns {boolean}
+ * @param rel - Path relative to the manifest root.
  */
-export function isLoopPath(rel) {
+export function isLoopPath(rel: string): boolean {
     return String(rel)
         .split(/[\\/]+/)
         .map((part) => part.replace(/\.[a-z0-9]+$/i, '').replace(/([a-z])([A-Z])/g, '$1 $2'))
@@ -321,35 +411,33 @@ export function isLoopPath(rel) {
 /**
  * Build one manifest entry from an analysed file. Pure: no decoding.
  *
- * @param {Object} analysis
- * @param {string} analysis.rel - Path relative to the manifest root.
- * @param {number[]} analysis.peaks - Normalised peaks (0..1), any resolution.
- * @param {number|null} [analysis.duration] - Seconds.
- * @param {number|null} [analysis.bpm] - Detected tempo, used only when the
+ * @param analysis
+ * @param analysis.rel - Path relative to the manifest root.
+ * @param analysis.peaks - Normalised peaks (0..1), any resolution.
+ * @param [analysis.duration] - Seconds.
+ * @param [analysis.bpm] - Detected tempo, used only when the
  *   file name has none.
- * @param {Object} [options]
- * @param {string} [options.baseUrl='/'] - Public URL of the root.
- * @param {number} [options.bars=64] - Bars in the `peaks` hex.
- * @param {string} [options.type] - Type for every sound; default: the name
+ * @param options
+ * @param [options.baseUrl='/'] - Public URL of the root.
+ * @param [options.bars=64] - Bars in the `peaks` hex.
+ * @param [options.type] - Type for every sound; default: the name
  *   of the file's folder, none for a file directly in the root.
- * @param {string} [options.waveform] - URL of the file's full peaks JSON.
- * @returns {{url: string, title: string, type?: string, bpm?: number,
- *   key?: string, loop?: true, duration?: number, peaks: string, waveform?: string}}
+ * @param [options.waveform] - URL of the file's full peaks JSON.
  */
-export function manifestEntry(analysis, options = {}) {
+export function manifestEntry(analysis: ManifestAnalysis, options: ManifestEntryOptions = {}): ManifestEntry {
     const rel = String(analysis.rel).split(/[\\/]+/).filter(Boolean).join('/');
     const bars = options.bars ?? DEFAULT_MANIFEST_BARS;
     const parsed = parseFilename(rel);
     const folders = rel.split('/').slice(0, -1);
 
-    const entry = {url: fileUrl(rel, options.baseUrl ?? '/'), title: parsed.title};
+    const entry = {url: fileUrl(rel, options.baseUrl ?? '/'), title: parsed.title} as ManifestEntry;
     const type = options.type || folders[folders.length - 1];
     if (type) entry.type = type;
-    const bpm = parsed.bpm ?? (Number.isFinite(analysis.bpm) && analysis.bpm > 0 ? analysis.bpm : null);
+    const bpm = parsed.bpm ?? (Number.isFinite(analysis.bpm) && analysis.bpm! > 0 ? analysis.bpm : null);
     if (bpm != null) entry.bpm = bpm;
     if (parsed.key) entry.key = parsed.key;
     if (isLoopPath(rel)) entry.loop = true;
-    if (Number.isFinite(analysis.duration)) entry.duration = Math.round(analysis.duration * 100) / 100;
+    if (Number.isFinite(analysis.duration)) entry.duration = Math.round(analysis.duration! * 100) / 100;
     entry.peaks = encodePeaks(resamplePeaks(analysis.peaks, bars));
     if (options.waveform) entry.waveform = options.waveform;
     return entry;
@@ -358,10 +446,9 @@ export function manifestEntry(analysis, options = {}) {
 /**
  * Wrap entries as a manifest, sorted by their source paths (natural order).
  *
- * @param {{rel: string, entry: Object}[]} items
- * @returns {{version: number, sounds: Object[]}}
+ * @param items
  */
-export function createManifest(items) {
+export function createManifest(items: ManifestItem[]): SoundsManifest {
     const sorted = [...items].sort((a, b) => naturalCompare(a.rel, b.rel));
     return {version: MANIFEST_VERSION, sounds: sorted.map((x) => x.entry)};
 }
@@ -369,23 +456,22 @@ export function createManifest(items) {
 /**
  * Decode audio files and build a waveform-sounds manifest.
  *
- * @param {string[]} files - Audio file paths.
- * @param {Object} [options]
- * @param {string} [options.root] - Directory URLs and types are relative to;
+ * @param files - Audio file paths.
+ * @param options
+ * @param [options.root] - Directory URLs and types are relative to;
  *   default: the deepest folder containing every file.
- * @param {string} [options.baseUrl='/'] - Public URL of `root`.
- * @param {number} [options.bars=64] - Bars per sound.
- * @param {string} [options.type] - Type for every sound (default: folder name).
- * @param {boolean} [options.detectBPM=false] - Detect tempo for files whose
+ * @param [options.baseUrl='/'] - Public URL of `root`.
+ * @param [options.bars=64] - Bars per sound.
+ * @param [options.type] - Type for every sound (default: folder name).
+ * @param [options.detectBPM=false] - Detect tempo for files whose
  *   name carries none.
- * @param {number} [options.samples=1800] - Resolution decoded at before
+ * @param [options.samples=1800] - Resolution decoded at before
  *   downsampling to `bars`.
- * @param {(file: string, rel: string) => (string|undefined)} [options.waveform]
+ * @param [options.waveform]
  *   - Returns the URL of a file's full peaks JSON, if there is one.
- * @returns {Promise<{version: number, sounds: Object[]}>}
- * @throws {Error} When a file can't be decoded, or lies outside `root`.
+ * @throws When a file can't be decoded, or lies outside `root`.
  */
-export async function buildManifest(files, options = {}) {
+export async function buildManifest(files: string[], options: BuildManifestOptions = {}): Promise<SoundsManifest> {
     const bars = options.bars == null ? DEFAULT_MANIFEST_BARS : Number(options.bars);
     if (!Number.isInteger(bars) || bars < 1) {
         throw new Error(`[WaveformGen] bars must be a positive integer, got: ${options.bars}`);
@@ -395,7 +481,7 @@ export async function buildManifest(files, options = {}) {
         ? resolve(options.root)
         : commonRoot(abs.map((path) => ({path, isDir: false}))) ?? process.cwd();
 
-    const items = [];
+    const items: ManifestItem[] = [];
     for (const file of abs) {
         const rel = relativeTo(root, file);
         const result = await generatePeaks(file, {
@@ -417,12 +503,11 @@ export async function buildManifest(files, options = {}) {
 /**
  * A file's path relative to the manifest root, with `/` separators.
  *
- * @param {string} root - Absolute root directory.
- * @param {string} file - Absolute file path.
- * @returns {string}
- * @throws {Error} When the file is not inside the root.
+ * @param root - Absolute root directory.
+ * @param file - Absolute file path.
+ * @throws When the file is not inside the root.
  */
-export function relativeTo(root, file) {
+export function relativeTo(root: string, file: string): string {
     const rel = relative(root, file);
     if (!rel || rel === '..' || rel.startsWith('..' + sep) || isAbsolute(rel)) {
         throw new Error(`[WaveformGen] ${basename(file)} is outside the manifest root ${root} — set --root to a folder containing it`);

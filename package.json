@@ -3,23 +3,29 @@
   "version": "2.2.0",
   "description": "Generate waveform peak data from audio files. CLI and library for pre-computing waveform data for WaveformPlayer, and sounds manifests for WaveformSounds.",
   "type": "module",
-  "main": "./lib/index.js",
+  "main": "./dist/lib/index.js",
+  "types": "./dist/lib/index.d.ts",
   "exports": {
-    ".": "./lib/index.js"
+    ".": {
+      "types": "./dist/lib/index.d.ts",
+      "default": "./dist/lib/index.js"
+    }
   },
   "bin": {
-    "waveform-gen": "bin/waveform-gen.js"
+    "waveform-gen": "dist/bin/waveform-gen.js"
   },
   "files": [
-    "lib/",
-    "bin/",
+    "dist/",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "vitest run",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && tsc -p tsconfig.types.json",
+    "test": "npm run build && vitest run",
     "test:watch": "vitest",
-    "test:cli": "node bin/waveform-gen.js --help"
+    "test:cli": "node dist/bin/waveform-gen.js --help",
+    "typecheck": "tsc -p .",
+    "prepack": "npm run build"
   },
   "keywords": [
     "waveform",
@@ -49,6 +55,8 @@
     "audio-decode": "^3.11.0"
   },
   "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
     "vitest": "^5.1.1"
   }
 }

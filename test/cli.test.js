@@ -16,7 +16,8 @@ import { encodeWav, tone } from './helpers/wav.js';
  *
  * Flags are parsed before any file work, so these run without audio fixtures.
  */
-const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'waveform-gen.js');
+// The built CLI, as npm installs it (`npm test` builds first).
+const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist', 'bin', 'waveform-gen.js');
 
 /** Run the CLI and resolve with its exit code and streams (never rejects). */
 function run(args, opts = {}) {

@@ -17,7 +17,7 @@ import {
 	isLoopPath,
 	createManifest,
 	buildManifest,
-} from '../lib/index.js';
+} from '../src/lib/index.ts';
 
 /**
  * `--manifest` writes the one-file-per-pack JSON that
@@ -29,7 +29,8 @@ import {
  */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BIN = join(HERE, '..', 'bin', 'waveform-gen.js');
+// The built CLI, as npm installs it (`npm test` builds first).
+const BIN = join(HERE, '..', 'dist', 'bin', 'waveform-gen.js');
 
 // The core lives in a sibling repo in the family workspace. When it's there,
 // the encoding is checked against the real thing; a standalone clone falls

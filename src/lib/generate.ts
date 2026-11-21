@@ -7,20 +7,57 @@ import decode from 'audio-decode';
 import {readFile} from 'node:fs/promises';
 import {basename, extname} from 'node:path';
 
+/** Options for {@link generatePeaks}. */
+export interface GeneratePeaksOptions {
+    /**
+     * Number of peaks to generate (default 1800, matching the CLI default and
+     * the player's live-decode resolution); must be a positive integer.
+     */
+    samples?: number;
+    /** Decimal places for rounding (default 2); negative leaves peaks unrounded. */
+    precision?: number;
+    /** Also detect BPM (default false). */
+    detectBPM?: boolean;
+}
+
+/** What {@link generatePeaks} resolves with. */
+export interface PeaksResult {
+    /** Normalised peaks, loudest exactly 1.0. */
+    peaks: number[];
+    /** Detected tempo, or null when not asked for or not found. */
+    bpm: number | null;
+    /** Decoded length in seconds (unrounded). */
+    duration: number;
+}
+
+/** The AudioBuffer-shaped read interface the peak and BPM code expects. */
+interface AudioBufferView {
+    length: number;
+    numberOfChannels: number;
+    sampleRate: number;
+    getChannelData: (c: number) => Float32Array;
+}
+
+/** audio-decode v3's result. */
+interface DecodedAudio {
+    channelData: Float32Array[];
+    sampleRate: number;
+}
+
 /**
  * Extract normalized peak data from an audio file
- * @param {string} filePath - Path to audio file (mp3, wav, flac, ogg)
- * @param {Object} [options={}]
- * @param {number} [options.samples=1800] - Number of peaks to generate (matches
+ * @param filePath - Path to audio file (mp3, wav, flac, ogg)
+ * @param options
+ * @param [options.samples=1800] - Number of peaks to generate (matches
  *   the CLI default and the player's live-decode resolution); must be a
  *   positive integer
- * @param {number} [options.precision=2] - Decimal places for rounding
- * @param {boolean} [options.detectBPM=false] - Also detect BPM
- * @returns {Promise<{peaks: number[], bpm: number|null, duration: number}>}
- *   `duration` is the decoded length in seconds (unrounded).
- * @throws {Error} On an invalid `samples`, or a file that can't be decoded.
+ * @param [options.precision=2] - Decimal places for rounding
+ * @param [options.detectBPM=false] - Also detect BPM
+ * @returns The peaks, the BPM (null unless detected) and `duration`, the
+ *   decoded length in seconds (unrounded).
+ * @throws On an invalid `samples`, or a file that can't be decoded.
  */
-export async function generatePeaks(filePath, options = {}) {
+export async function generatePeaks(filePath: string, options: GeneratePeaksOptions = {}): Promise<PeaksResult> {
     // Same rule as the CLI's --samples: a positive integer (numeric strings
     // allowed). Unchecked, a negative count returned [] and 100.5 returned
     // 101 peaks, both without complaint.
@@ -32,10 +69,10 @@ export async function generatePeaks(filePath, options = {}) {
 
     // Read and decode
     const buffer = await readFile(filePath);
-    let audioBuffer;
+    let audioBuffer: AudioBufferView;
     try {
         audioBuffer = toAudioBufferView(await decode(buffer));
-    } catch (err) {
+    } catch (err: any) {
         // audio-decode signals an undecodable input with a message like
         // "Missing decoder for <type> format", "Cannot detect audio format"
         // (v2), or "Unknown audio format" (v3) — turn the cryptic crash into
@@ -60,7 +97,7 @@ export async function generatePeaks(filePath, options = {}) {
     const rounded = roundPeaks(normalized, precision);
 
     // BPM detection
-    let bpm = null;
+    let bpm: number | null = null;
     if (options.detectBPM) {
         bpm = detectBPM(audioBuffer);
     }
@@ -72,11 +109,10 @@ export async function generatePeaks(filePath, options = {}) {
  * Round peaks to `precision` decimal places; a negative precision returns
  * them unchanged (the CLI's documented "don't round").
  *
- * @param {number[]} peaks
- * @param {number} precision
- * @returns {number[]}
+ * @param peaks
+ * @param precision
  */
-export function roundPeaks(peaks, precision) {
+export function roundPeaks(peaks: number[], precision: number): number[] {
     if (!(precision >= 0)) return peaks;
     const f = Math.pow(10, precision);
     return peaks.map(p => Math.round(p * f) / f);
@@ -94,10 +130,9 @@ const UNSUPPORTED_EXTENSIONS = new Set(['m4a', 'aac']);
  * itself is bad, so telling the user "supported formats are mp3…" about their
  * mp3 would only contradict itself.
  *
- * @param {string} filePath - The file that failed to decode.
- * @returns {Error}
+ * @param filePath - The file that failed to decode.
  */
-function undecodableError(filePath) {
+function undecodableError(filePath: string): Error {
     const name = basename(filePath);
     const ext = extname(filePath).toLowerCase().replace('.', '') || 'unknown';
     if (UNSUPPORTED_EXTENSIONS.has(ext)) {
@@ -127,33 +162,31 @@ function undecodableError(filePath) {
  * Both are mapped to the AudioBuffer-shaped accessor the rest of this module
  * already expects.
  *
- * @param {AudioBuffer|{channelData: Float32Array[], sampleRate: number}} decoded
- * @returns {{length: number, numberOfChannels: number, sampleRate: number, getChannelData: (c: number) => Float32Array}}
+ * @param decoded
  */
-function toAudioBufferView(decoded) {
-    if (decoded && Array.isArray(decoded.channelData)) {
-        const channelData = decoded.channelData;
+function toAudioBufferView(decoded: AudioBufferView | DecodedAudio): AudioBufferView {
+    if (decoded && Array.isArray((decoded as DecodedAudio).channelData)) {
+        const channelData = (decoded as DecodedAudio).channelData;
         return {
             length: channelData[0] ? channelData[0].length : 0,
             numberOfChannels: channelData.length,
-            sampleRate: decoded.sampleRate,
-            getChannelData: (c) => channelData[c],
+            sampleRate: (decoded as DecodedAudio).sampleRate,
+            getChannelData: (c: number) => channelData[c],
         };
     }
     // Already an AudioBuffer (or AudioBuffer-like); use as-is.
-    return decoded;
+    return decoded as AudioBufferView;
 }
 
 /**
  * Extract peak amplitudes from an AudioBuffer
- * @param {AudioBuffer} buffer
- * @param {number} samples
- * @returns {number[]}
+ * @param buffer
+ * @param samples
  */
-function extractPeaks(buffer, samples) {
+function extractPeaks(buffer: AudioBufferView, samples: number): number[] {
     const sampleSize = buffer.length / samples;
     const channels = buffer.numberOfChannels;
-    const peaks = [];
+    const peaks: number[] = [];
 
     for (let c = 0; c < channels; c++) {
         const chan = buffer.getChannelData(c);
@@ -189,10 +222,9 @@ function extractPeaks(buffer, samples) {
  * (waveform-player/src/js/audio.js) — divide by the max — so pre-generated
  * JSON renders at identical amplitude to a live, in-browser decode. (Previously
  * this scaled to a 0.95 ceiling, making the same file render ~5% shorter.)
- * @param {number[]} peaks
- * @returns {number[]}
+ * @param peaks
  */
-function normalizePeaks(peaks) {
+function normalizePeaks(peaks: number[]): number[] {
     const maxPeak = peaks.reduce((m, v) => (v > m ? v : m), -Infinity);
     return maxPeak > 0 ? peaks.map(p => p / maxPeak) : peaks;
 }
@@ -200,10 +232,9 @@ function normalizePeaks(peaks) {
 /**
  * Detect BPM from AudioBuffer
  * Ported from WaveformPlayer's bpm.js
- * @param {AudioBuffer} buffer
- * @returns {number|null}
+ * @param buffer
  */
-function detectBPM(buffer) {
+function detectBPM(buffer: AudioBufferView): number | null {
     try {
         const channelData = buffer.getChannelData(0);
         const sampleRate = buffer.sampleRate;
@@ -211,7 +242,7 @@ function detectBPM(buffer) {
         // Detect onsets (transients/beats)
         const windowSize = 2048;
         const hopSize = windowSize / 2;
-        const onsets = [];
+        const onsets: number[] = [];
         let previousEnergy = 0;
 
         for (let i = 0; i < channelData.length - windowSize; i += hopSize) {
@@ -239,7 +270,7 @@ function detectBPM(buffer) {
         if (onsets.length < 2) return null;
 
         // Calculate intervals and convert to tempos
-        const tempoGroups = {};
+        const tempoGroups: Record<number, number> = {};
         for (let i = 1; i < onsets.length; i++) {
             const interval = (onsets[i] - onsets[i - 1]) / sampleRate;
             const tempo = 60 / interval;
@@ -251,7 +282,7 @@ function detectBPM(buffer) {
 
         // Find most common tempo
         let maxCount = 0;
-        let detectedBPM = null;
+        let detectedBPM: number | null = null;
         for (const [tempo, count] of Object.entries(tempoGroups)) {
             if (count > maxCount) {
                 maxCount = count;
